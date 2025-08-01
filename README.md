@@ -1,3 +1,5 @@
+# ⭐ Star 星星走起 动动发财手点点⭐Star
+
 # 🌐 Cloudflare Workers VPS 续期脚本
 
 本项目是一个基于 Cloudflare Workers 的 VPS 自动续期脚本，适用于 [vps.polarbear.nyc.mn](https://vps.polarbear.nyc.mn) 控制台。通过定时任务或手动触发，自动登录并续期对应的 VPS 服务。
