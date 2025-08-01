@@ -28,4 +28,3 @@
 访问 Cloudflare Workers 的地址即可手动启动续期流程。
 
 
-![示例输出](https://api.zha.x10.bz/icon.png)
