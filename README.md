@@ -20,6 +20,7 @@
    - `PUSHPLUS_TOKEN` xxxxxxxxxxxxxxxxxxxx（你的PUSHPLUS通知）
    - `VPS_LIST` （格式：123:DE-Frankfurt,321:US-Dallas,654:UK-Portsmouth,456:CA-Quebec）
    - `VPS 对应编号在哪里？ 访问官网后台，产品管理，打开一个管理在链接那里可以看到你的对应编号。
+![示例输出](./ui.png)
 5. **配置定时触发 Cron**
    示例：`18 4 1-31/3 * *` → 每 3 天的 04:18 自动运行
 
