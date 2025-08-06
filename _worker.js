@@ -14,38 +14,36 @@
 
 export default {
   async fetch(request, env, ctx) {
-    return new Response("Hello! This is fetch handler response.", {
+    const result = await handleRenewal(env);
+    return new Response(result, {
       headers: { "Content-Type": "text/plain; charset=utf-8" }
     });
   },
 
   async scheduled(event, env, ctx) {
-    console.log("⏰ Scheduled trigger fired at", new Date(event.scheduledTime).toISOString());
+    console.log("⏰ 计划任务触发时间：", new Date(event.scheduledTime).toISOString());
     const result = await handleRenewal(env);
     console.log(result);
   }
 };
-
 // VPS 续期主逻辑
 async function handleRenewal(env) {
   const ARCTICCLOUD_TOKEN = env.ARCTICCLOUD_TOKEN;
   const PUSHPLUS_TOKEN = env.PUSHPLUS_TOKEN;
   const VPS_LIST = env.VPS_LIST;
 
-  const startTime = Date.now();
-
   if (!ARCTICCLOUD_TOKEN || !PUSHPLUS_TOKEN || !VPS_LIST) {
-    return new Response("❌ 环境变量未设置或格式错误，必须设置 ARCTICCLOUD_TOKEN, PUSHPLUS_TOKEN, VPS_LIST", { status: 400 });
+    return "❌ 环境变量未设置或格式错误，必须设置 ARCTICCLOUD_TOKEN, PUSHPLUS_TOKEN, VPS_LIST";
   }
 
   const [username, password] = ARCTICCLOUD_TOKEN.split(":");
   if (!username || !password) {
-    return new Response("❌ ARCTICCLOUD_TOKEN 格式错误，需为 用户名:密码", { status: 400 });
+    return "❌ ARCTICCLOUD_TOKEN 格式错误，需为 用户名:密码";
   }
 
   const { VPS_NAME, VPS_IDS } = parseVpsList(VPS_LIST);
   if (VPS_IDS.length === 0) {
-    return new Response("❌ VPS_LIST 格式错误或为空", { status: 400 });
+    return "❌ VPS_LIST 格式错误或为空";
   }
 
   const BASE_URL = "https://vps.polarbear.nyc.mn";
@@ -54,9 +52,7 @@ async function handleRenewal(env) {
   // 登录获取 swapuuid Cookie
   const loginResp = await fetch(`${BASE_URL}/index/login/`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded"
-    },
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: `swapname=${encodeURIComponent(username)}&swappass=${encodeURIComponent(password)}`,
     redirect: "manual"
   });
@@ -64,9 +60,9 @@ async function handleRenewal(env) {
   const cookieHeader = loginResp.headers.get("set-cookie");
   const match = /swapuuid=([^;]+)/.exec(cookieHeader || "");
   if (!match) {
-    log += `❌ 登录失败，未能获取 swapuuid cookie\n`;
+    log += `❌ 登录失败\n`;
     await pushplus(PUSHPLUS_TOKEN, "VPS 登录失败", log);
-    return new Response(log, { status: 500 });
+    return log;
   }
 
   const swapuuid = match[1];
@@ -79,10 +75,7 @@ async function handleRenewal(env) {
 
     const renewResp = await fetch(`${BASE_URL}/control/detail/${id}/pay/`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Cookie": `swapuuid=${swapuuid}`
-      },
+      headers: { "Content-Type": "application/x-www-form-urlencoded", "Cookie": `swapuuid=${swapuuid}` },
       redirect: "manual"
     });
 
@@ -99,21 +92,16 @@ async function handleRenewal(env) {
       msg = decodeURIComponent(errorMatch[1]);
     }
 
-    log += `${status} ${name}\n`;
-    log += `返回内容：${msg}\n`;
-    log += `--------------------------\n`;
+    log += `${status} ${name}\n返回内容：${msg}\n--------------------------\n`;
   }
 
-  const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+  const duration = ((Date.now() - Date.now()) / 1000).toFixed(2);
   log += `\n✅ 所有任务完成，耗时 ${duration} 秒`;
 
   await pushplus(PUSHPLUS_TOKEN, "VPS 续期结果通知", log);
 
-  return new Response(log, {
-    headers: { "Content-Type": "text/plain; charset=utf-8" }
-  });
+  return log;
 }
-
 // VPS_LIST 解析函数
 function parseVpsList(vpsListStr) {
   const map = {};
@@ -129,7 +117,6 @@ function parseVpsList(vpsListStr) {
   }
   return { VPS_NAME: map, VPS_IDS: ids };
 }
-
 // PushPlus 推送函数
 async function pushplus(token, title, content) {
   if (!token) return;
