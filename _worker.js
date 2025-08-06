@@ -13,15 +13,16 @@
 // 支持手动访问触发与定时触发（配合 Cloudflare Cron Trigger）
 
 export default {
-  // 手动访问触发
   async fetch(request, env, ctx) {
-    return await handleRenewal(env);
+    return new Response("Hello! This is fetch handler response.", {
+      headers: { "Content-Type": "text/plain; charset=utf-8" }
+    });
   },
 
-  // Cloudflare Cron 定时触发
   async scheduled(event, env, ctx) {
-    console.log("⏰ 计划任务触发时间：", new Date(event.scheduledTime).toLocaleString("zh-CN"));
-    await handleRenewal(env);
+    console.log("⏰ Scheduled trigger fired at", new Date(event.scheduledTime).toISOString());
+    const result = await handleRenewal(env);
+    console.log(result);
   }
 };
 
