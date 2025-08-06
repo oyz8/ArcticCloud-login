@@ -69,7 +69,7 @@ async function handleRenewal(env) {
   }
 
   const swapuuid = match[1];
-  log += `✅ 登录成功，获取 swapuuid 成功\n\n`;
+  log += `✅ 登录成功\n\n`;
 
   // 续期每个 VPS
   for (const id of VPS_IDS) {
