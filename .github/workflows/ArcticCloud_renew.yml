@@ -1,0 +1,201 @@
+# Secrets 配置
+# ARCTICCLOUD_ACCOUNTS 示例 user:password:ID:洛杉矶VPS
+# TG_BOT_TOKEN 示例 123456789:ABC-DEF...
+# TG_CHAT_ID 示例 123456789
+
+# ARCTICCLOUD_ACCOUNTS 格式详解
+# 单账号多VPS：user:password:179:洛杉矶VPS,180:东京VPS,181:香港VPS
+# 多账号（换行分隔）：
+# user1:password1:179:洛杉矶VPS,180:东京VPS
+# user2:password2:185:测试机
+# user3:password3:190:备用机,191:开发机
+
+name: ArcticCloud 自动续期
+
+on:
+  schedule:
+    - cron: '02 4 * * *'  # 每天北京时间 12:02 运行
+  workflow_dispatch:
+
+jobs:
+  renew:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 续期 VPS
+        run: |
+          cat << 'EOF' > renew.js
+          const https = require('https');
+          const { URL } = require('url');
+
+          const ACCOUNTS = process.env.ARCTICCLOUD_ACCOUNTS;
+          const TG_BOT_TOKEN = process.env.TG_BOT_TOKEN;
+          const TG_CHAT_ID = process.env.TG_CHAT_ID;
+
+          const BASE_URL = 'https://vps.polarbear.nyc.mn';
+          const agent = new https.Agent({ rejectUnauthorized: false });
+
+          function request(url, options = {}) {
+            return new Promise((resolve, reject) => {
+              const u = new URL(url);
+              const req = https.request(url, {
+                method: options.method || 'GET',
+                agent: u.hostname === 'vps.polarbear.nyc.mn' ? agent : undefined,
+                headers: {
+                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                  ...options.headers
+                }
+              }, (res) => {
+                let data = '';
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => resolve({
+                  status: res.statusCode,
+                  headers: res.headers,
+                  body: data
+                }));
+              });
+              req.on('error', reject);
+              if (options.body) req.write(options.body);
+              req.end();
+            });
+          }
+
+          async function sendTelegram(message) {
+            if (!TG_BOT_TOKEN || !TG_CHAT_ID) return;
+            try {
+              await request(`https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ chat_id: TG_CHAT_ID, text: message, parse_mode: 'Markdown' })
+              });
+            } catch (e) {}
+          }
+
+          function parseAccounts(str) {
+            const accounts = [];
+            for (const line of str.trim().split('\n')) {
+              if (!line.trim()) continue;
+              const parts = line.split(':');
+              if (parts.length < 4) continue;
+              const username = parts[0].trim();
+              const password = parts[1].trim();
+              const vpsList = [];
+              for (const item of parts.slice(2).join(':').split(',')) {
+                const [id, name] = item.split(':');
+                if (id && name) vpsList.push({ id: id.trim(), name: name.trim() });
+              }
+              if (vpsList.length > 0) accounts.push({ username, password, vpsList });
+            }
+            return accounts;
+          }
+
+          async function renewAccount(account, index) {
+            let logResult = `\n🔹 账号 ${index}\n`;
+            let tgResult = `\n👤 *${account.username}*\n`;
+
+            try {
+              const loginResp = await request(`${BASE_URL}/index/login/`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/x-www-form-urlencoded',
+                  'Origin': BASE_URL,
+                  'Referer': `${BASE_URL}/index/login/`
+                },
+                body: `swapname=${encodeURIComponent(account.username)}&swappass=${encodeURIComponent(account.password)}`
+              });
+
+              const location = loginResp.headers.location || '';
+              const setCookie = loginResp.headers['set-cookie'] || [];
+              const cookieStr = Array.isArray(setCookie) ? setCookie.join('; ') : setCookie;
+
+              if (location.includes('error=')) {
+                const error = decodeURIComponent(location.match(/error=([^&]+)/)?.[1] || '未知');
+                logResult += `❌ 登录失败: ${error}\n`;
+                tgResult += `❌ 登录失败: ${error}\n`;
+                return { logResult, tgResult };
+              }
+
+              const uuidMatch = /swapuuid=([^;]+)/.exec(cookieStr);
+              if (!uuidMatch) {
+                logResult += `❌ 登录失败: 未获取凭证\n`;
+                tgResult += `❌ 登录失败: 未获取凭证\n`;
+                return { logResult, tgResult };
+              }
+
+              logResult += `✅ 登录成功\n`;
+              tgResult += `✅ 登录成功\n`;
+
+              for (const vps of account.vpsList) {
+                const renewResp = await request(`${BASE_URL}/control/detail/${vps.id}/pay/`, {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'Cookie': `swapuuid=${uuidMatch[1]}`,
+                    'Origin': BASE_URL,
+                    'Referer': `${BASE_URL}/control/detail/${vps.id}/`
+                  }
+                });
+
+                const renewLocation = renewResp.headers.location || '';
+                const successMatch = renewLocation.match(/success=([^&]+)/);
+                const errorMatch = renewLocation.match(/error=([^&]+)/);
+
+                let result;
+                if (successMatch) {
+                  result = `✅ ${vps.name}: ${decodeURIComponent(successMatch[1])}`;
+                } else if (errorMatch) {
+                  result = `❌ ${vps.name}: ${decodeURIComponent(errorMatch[1])}`;
+                } else {
+                  result = `❓ ${vps.name}: 状态码 ${renewResp.status}`;
+                }
+                logResult += `  ${result}\n`;
+                tgResult += `  ${result}\n`;
+              }
+
+            } catch (err) {
+              logResult += `❌ 异常: ${err.message}\n`;
+              tgResult += `❌ 异常: ${err.message}\n`;
+            }
+
+            return { logResult, tgResult };
+          }
+
+          async function main() {
+            const timeStr = new Date().toLocaleString('zh-CN', {timeZone: 'Asia/Shanghai'});
+            
+            if (!ACCOUNTS) {
+              console.log('❌ ARCTICCLOUD_ACCOUNTS 未设置');
+              await sendTelegram(`🐻 *ArcticCloud VPS 续期*\n🕒 ${timeStr}\n\n❌ ARCTICCLOUD_ACCOUNTS 未设置`);
+              return;
+            }
+
+            const accounts = parseAccounts(ACCOUNTS);
+            if (accounts.length === 0) {
+              console.log('❌ ARCTICCLOUD_ACCOUNTS 格式错误');
+              await sendTelegram(`🐻 *ArcticCloud VPS 续期*\n🕒 ${timeStr}\n\n❌ ARCTICCLOUD_ACCOUNTS 格式错误`);
+              return;
+            }
+
+            let logMsg = `🐻 ArcticCloud VPS 续期\n🕒 ${timeStr}\n📊 共 ${accounts.length} 个账号\n`;
+            let tgMsg = `🐻 *ArcticCloud VPS 续期*\n🕒 ${timeStr}\n\n📊 共 ${accounts.length} 个账号\n`;
+
+            for (let i = 0; i < accounts.length; i++) {
+              const { logResult, tgResult } = await renewAccount(accounts[i], i + 1);
+              logMsg += logResult;
+              tgMsg += tgResult;
+            }
+
+            logMsg += '\n✅ 任务完成';
+            tgMsg += '\n✅ 任务完成';
+
+            console.log(logMsg);
+            await sendTelegram(tgMsg);
+          }
+
+          main();
+          EOF
+          node renew.js
+        env:
+          ARCTICCLOUD_ACCOUNTS: ${{ secrets.ARCTICCLOUD_ACCOUNTS }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
