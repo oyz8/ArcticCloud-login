@@ -1,14 +1,8 @@
 # Secrets 配置
-# ARCTICCLOUD_ACCOUNTS 示例 user:password:ID:洛杉矶VPS
+# ARCTICCLOUD_ACCOUNTS 示例 user:password
 # TG_BOT_TOKEN 示例 123456789:ABC-DEF...
 # TG_CHAT_ID 示例 123456789
 
-# ARCTICCLOUD_ACCOUNTS 格式详解
-# 单账号多VPS：user:password:179:洛杉矶VPS,180:东京VPS,181:香港VPS
-# 多账号（换行分隔）：
-# user1:password1:179:洛杉矶VPS,180:东京VPS
-# user2:password2:185:测试机
-# user3:password3:190:备用机,191:开发机
 
 name: ArcticCloud 自动续期
 
@@ -29,14 +23,11 @@ jobs:
           cat << 'EOF' > renew.js
           const https = require('https');
           const { URL } = require('url');
-
           const ACCOUNTS = process.env.ARCTICCLOUD_ACCOUNTS;
           const TG_BOT_TOKEN = process.env.TG_BOT_TOKEN;
           const TG_CHAT_ID = process.env.TG_CHAT_ID;
-
           const BASE_URL = 'https://vps.polarbear.nyc.mn';
           const agent = new https.Agent({ rejectUnauthorized: false });
-
           function request(url, options = {}) {
             return new Promise((resolve, reject) => {
               const u = new URL(url);
@@ -62,7 +53,6 @@ jobs:
               req.end();
             });
           }
-
           async function sendTelegram(message) {
             if (!TG_BOT_TOKEN || !TG_CHAT_ID) return;
             try {
@@ -73,30 +63,35 @@ jobs:
               });
             } catch (e) {}
           }
-
           function parseAccounts(str) {
             const accounts = [];
             for (const line of str.trim().split('\n')) {
               if (!line.trim()) continue;
-              const parts = line.split(':');
-              if (parts.length < 4) continue;
-              const username = parts[0].trim();
-              const password = parts[1].trim();
-              const vpsList = [];
-              for (const item of parts.slice(2).join(':').split(',')) {
-                const [id, name] = item.split(':');
-                if (id && name) vpsList.push({ id: id.trim(), name: name.trim() });
+              const [username, password] = line.split(':');
+              if (username && password) {
+                accounts.push({ username: username.trim(), password: password.trim() });
               }
-              if (vpsList.length > 0) accounts.push({ username, password, vpsList });
             }
             return accounts;
           }
-
+          function parseVPSList(html) {
+            const vpsList = [];
+            // 匹配每一行 <tr>...</tr>
+            const rowRegex = /<tr>[\s\S]*?<td>[^<]*<\/td>\s*<td>([^<]+)<\/td>[\s\S]*?href="\/control\/detail\/(\d+)\/"[\s\S]*?<\/tr>/g;
+            let match;
+            while ((match = rowRegex.exec(html)) !== null) {
+              vpsList.push({
+                name: match[1].trim(),
+                id: match[2]
+              });
+            }
+            return vpsList;
+          }
           async function renewAccount(account, index) {
             let logResult = `\n🔹 账号 ${index}\n`;
             let tgResult = `\n👤 *${account.username}*\n`;
-
             try {
+              // 登录
               const loginResp = await request(`${BASE_URL}/index/login/`, {
                 method: 'POST',
                 headers: {
@@ -106,43 +101,51 @@ jobs:
                 },
                 body: `swapname=${encodeURIComponent(account.username)}&swappass=${encodeURIComponent(account.password)}`
               });
-
               const location = loginResp.headers.location || '';
               const setCookie = loginResp.headers['set-cookie'] || [];
               const cookieStr = Array.isArray(setCookie) ? setCookie.join('; ') : setCookie;
-
               if (location.includes('error=')) {
                 const error = decodeURIComponent(location.match(/error=([^&]+)/)?.[1] || '未知');
                 logResult += `❌ 登录失败: ${error}\n`;
                 tgResult += `❌ 登录失败: ${error}\n`;
                 return { logResult, tgResult };
               }
-
               const uuidMatch = /swapuuid=([^;]+)/.exec(cookieStr);
               if (!uuidMatch) {
                 logResult += `❌ 登录失败: 未获取凭证\n`;
                 tgResult += `❌ 登录失败: 未获取凭证\n`;
                 return { logResult, tgResult };
               }
-
+              const cookie = `swapuuid=${uuidMatch[1]}`;
               logResult += `✅ 登录成功\n`;
               tgResult += `✅ 登录成功\n`;
-
-              for (const vps of account.vpsList) {
+              // 获取 VPS 列表
+              const listResp = await request(`${BASE_URL}/control/index/`, {
+                headers: { 'Cookie': cookie }
+              });
+              const vpsList = parseVPSList(listResp.body);
+              
+              if (vpsList.length === 0) {
+                logResult += `  ⚠️ 未找到 VPS\n`;
+                tgResult += `  ⚠️ 未找到 VPS\n`;
+                return { logResult, tgResult };
+              }
+              logResult += `  📦 找到 ${vpsList.length} 个 VPS\n`;
+              tgResult += `  📦 找到 ${vpsList.length} 个 VPS\n`;
+              // 续期每个 VPS
+              for (const vps of vpsList) {
                 const renewResp = await request(`${BASE_URL}/control/detail/${vps.id}/pay/`, {
                   method: 'POST',
                   headers: {
                     'Content-Type': 'application/x-www-form-urlencoded',
-                    'Cookie': `swapuuid=${uuidMatch[1]}`,
+                    'Cookie': cookie,
                     'Origin': BASE_URL,
                     'Referer': `${BASE_URL}/control/detail/${vps.id}/`
                   }
                 });
-
                 const renewLocation = renewResp.headers.location || '';
                 const successMatch = renewLocation.match(/success=([^&]+)/);
                 const errorMatch = renewLocation.match(/error=([^&]+)/);
-
                 let result;
                 if (successMatch) {
                   result = `✅ ${vps.name}: ${decodeURIComponent(successMatch[1])}`;
@@ -154,15 +157,12 @@ jobs:
                 logResult += `  ${result}\n`;
                 tgResult += `  ${result}\n`;
               }
-
             } catch (err) {
               logResult += `❌ 异常: ${err.message}\n`;
               tgResult += `❌ 异常: ${err.message}\n`;
             }
-
             return { logResult, tgResult };
           }
-
           async function main() {
             const timeStr = new Date().toLocaleString('zh-CN', {timeZone: 'Asia/Shanghai'});
             
@@ -171,30 +171,24 @@ jobs:
               await sendTelegram(`🐻 *ArcticCloud VPS 续期*\n🕒 ${timeStr}\n\n❌ ARCTICCLOUD_ACCOUNTS 未设置`);
               return;
             }
-
             const accounts = parseAccounts(ACCOUNTS);
             if (accounts.length === 0) {
               console.log('❌ ARCTICCLOUD_ACCOUNTS 格式错误');
               await sendTelegram(`🐻 *ArcticCloud VPS 续期*\n🕒 ${timeStr}\n\n❌ ARCTICCLOUD_ACCOUNTS 格式错误`);
               return;
             }
-
             let logMsg = `🐻 ArcticCloud VPS 续期\n🕒 ${timeStr}\n📊 共 ${accounts.length} 个账号\n`;
             let tgMsg = `🐻 *ArcticCloud VPS 续期*\n🕒 ${timeStr}\n\n📊 共 ${accounts.length} 个账号\n`;
-
             for (let i = 0; i < accounts.length; i++) {
               const { logResult, tgResult } = await renewAccount(accounts[i], i + 1);
               logMsg += logResult;
               tgMsg += tgResult;
             }
-
             logMsg += '\n✅ 任务完成';
             tgMsg += '\n✅ 任务完成';
-
             console.log(logMsg);
             await sendTelegram(tgMsg);
           }
-
           main();
           EOF
           node renew.js
