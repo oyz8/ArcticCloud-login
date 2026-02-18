@@ -3,6 +3,10 @@
 # TG_BOT_TOKEN 示例 123456789:ABC-DEF...
 # TG_CHAT_ID 示例 123456789
 
+# 多账号换行：
+# user1:password1
+# user2:password2
+
 
 name: ArcticCloud 自动续期
 
